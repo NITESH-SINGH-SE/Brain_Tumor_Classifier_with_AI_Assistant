@@ -121,11 +121,6 @@ def generate_pdf_report(patient_info, prediction, description, precautions, orig
     pdf.output(output_path)
     return output_path
 
-# Function to encode the image
-# def encode_image(image_path):
-#     with open(image_path, "rb") as image_file:
-#         return base64.b64encode(image_file.read()).decode("utf-8")
-
 def pil_to_base64(pil_image, format='JPEG'):
     """
     Converts a PIL Image to a base64 encoded string.
@@ -172,8 +167,8 @@ with tab1:
         age = st.number_input("Age", min_value=0, max_value=120)
         gender = st.selectbox("Gender", ["Male", "Female", "Other"])
     with col2:
+        symptoms = st.text_area("Symptoms (optional)", placeholder="E.g. Headache, vision issues...")
         uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"])
-    symptoms = st.text_area("Symptoms (optional)", placeholder="E.g. Headache, vision issues...")
     if uploaded_file:
         submitted = st.button("Submit")
 
@@ -252,6 +247,7 @@ with tab3:
             label="⬇️ Download Report",
             data=pdf_data,
             file_name="tumor_report.pdf",
+            on_click="ignore"
         )
 
 with tab4:

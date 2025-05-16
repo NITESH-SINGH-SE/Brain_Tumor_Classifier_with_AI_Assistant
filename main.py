@@ -11,6 +11,8 @@ from io import BytesIO
 from datetime import datetime
 from openai import OpenAI
 import unicodedata
+import smtplib
+from email.message import EmailMessage
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
@@ -121,10 +123,31 @@ def generate_pdf_report(patient_info, prediction, description, precautions, orig
     pdf.output(output_path)
     return output_path
 
-# Function to encode the image
-# def encode_image(image_path):
-#     with open(image_path, "rb") as image_file:
-#         return base64.b64encode(image_file.read()).decode("utf-8")
+# Function to send email with PDF attachment
+def send_email_with_attachment(to_email, attachment_path):
+    email = st.secrets["EMAIL"]
+    email_password = st.secrets["EMAIL_PASSWORD"]
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    subject = f"Brain Tumor Report - {now}"
+    body = "Hi,\n\nPlease find the attached brain tumor report.\n\nRegards."
+
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = email
+    msg['To'] = to_email
+    msg.set_content(body)
+
+    # Attach the PDF
+    with open(attachment_path, 'rb') as f:
+        file_data = f.read()
+        file_name = attachment_path.split("/")[-1]
+    msg.add_attachment(file_data, maintype='application', subtype='pdf', filename=file_name)
+
+    # Send the email (using Gmail SMTP as example)
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(email, email_password)
+        smtp.send_message(msg)
+
 
 def pil_to_base64(pil_image, format='JPEG'):
     """
@@ -170,10 +193,11 @@ with tab1:
     with col1:
         name = st.text_input("Name", placeholder="Name")
         age = st.number_input("Age", min_value=0, max_value=120)
-        gender = st.selectbox("Gender", ["Male", "Female", "Other"])
     with col2:
-        uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"])
+        gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+        to_email = st.text_input("Email", placeholder="your_email@example.com")
     symptoms = st.text_area("Symptoms (optional)", placeholder="E.g. Headache, vision issues...")
+    uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"])
     if uploaded_file:
         submitted = st.button("Submit")
 
@@ -252,7 +276,16 @@ with tab3:
             label="⬇️ Download Report",
             data=pdf_data,
             file_name="tumor_report.pdf",
+            on_click="ignore"
         )
+
+        # if to_email and st.button("📩 Send Email Report"):
+        #     try:
+        #         send_email_with_attachment(to_email, pdf_data)
+        #         st.success("Email sent successfully!")
+        #     except Exception as e:
+        #         st.error(f"Failed to send email: {e}")
+
 
 with tab4:
     if uploaded_file and submitted:
