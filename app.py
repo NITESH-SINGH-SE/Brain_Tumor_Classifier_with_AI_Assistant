@@ -10,6 +10,7 @@ import base64
 from io import BytesIO
 from datetime import datetime
 from openai import OpenAI
+import unicodedata
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
@@ -63,9 +64,17 @@ def overlay_heatmap(image, heatmap, alpha=0.4):
     superimposed_img = heatmap_color * alpha + image_np
     return Image.fromarray(np.uint8(superimposed_img))
 
+def sanitize_text(text):
+    # Replace curly quotes and other problematic Unicode with safe ASCII
+    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+
 def generate_pdf_report(patient_info, prediction, description, precautions, original_img, gradcam_img, output_path="report.pdf"):
+    description = sanitize_text(description)
+    precautions = sanitize_text(precautions)
     pdf = FPDF()
     pdf.add_page()
+
+    
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, "Tumor Classification Report", ln=True, align='C')
     pdf.set_font("Arial", '', 12)
@@ -153,121 +162,145 @@ Precautions: ...
 # ========== App UI ==========
 st.title("🧠 Brain Tumor Classifier with Medical Assistant")
 
-uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"])
-col1, col2 = st.columns(2)
-with col1:
-    age = st.number_input("Age", min_value=0, max_value=120)
-with col2:
-    gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-symptoms = st.text_area("Symptoms (optional)", placeholder="E.g. Headache, vision issues...")
+tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "💡Prediction", "📄 Report", "🤖 AI Assistant"])
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    # st.image(image, caption="Uploaded Image", use_column_width=True)
-
-    img_array = preprocess_image(image)
-    try:
-        prediction = model.predict(img_array)
-    except Exception as e:
-        try:
-            prediction = model.predict({'input_layer_2': img_array})
-        except Exception as e2:
-            st.error(f"Prediction failed: {e}\nAlso tried dict input: {e2}")
-            st.stop()
-    # prediction = model.predict(img_array)
-    class_index = np.argmax(prediction)
-    class_label = class_labels[class_index]
-
-    st.markdown(f"### 🧠 Model Prediction: `{class_label}`")
-
-    # Grad-CAM
-    heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer_name)
-    heatmap_img = overlay_heatmap(image, heatmap)
-    # st.image(heatmap_img, caption="Grad-CAM Heatmap", use_column_width=True)
-
+# === Upload Tab ===
+with tab1:
     col1, col2 = st.columns(2)
     with col1:
-        st.image(image, caption="Original MRI", use_container_width=True)
+        name = st.text_input("Name", placeholder="Name")
+        age = st.number_input("Age", min_value=0, max_value=120)
+        gender = st.selectbox("Gender", ["Male", "Female", "Other"])
     with col2:
-        st.image(heatmap_img, caption="Grad-CAM", use_container_width=True)
+        uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"])
+    symptoms = st.text_area("Symptoms (optional)", placeholder="E.g. Headache, vision issues...")
+    if uploaded_file:
+        submitted = st.button("Submit")
 
-    # GPT Explanation
-    patient_info = {"Age": age, "Gender": gender, "Symptoms": symptoms}
-    prompt = generate_llm_prompt(class_label, patient_info)
-    base64_image = pil_to_base64(image)
-    with st.spinner("💬 Generating description and precautions using GPT..."):
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                    {"role": "user", "content": prompt},
-                    {"role": "user", "content": [{
-                            "type": "input_image",
-                            "image_url": f"data:image/jpeg;base64,{base64_image}",
-                        }],
-                    },
-                ],
-            temperature=0.5,
-        )
-        result = response.output_text
+with tab2:
+    if uploaded_file and submitted:
+        image = Image.open(uploaded_file).convert("RGB")
 
-    if "Precautions:" in result:
-        parts = result.split("Precautions:")
-        desc = parts[0].replace("Description:", "").strip()
-        precautions = parts[1].strip()
-    else:
-        desc = result.strip()
-        precautions = "Not provided."
+        img_array = preprocess_image(image)
+        try:
+            prediction = model.predict(img_array)
+        except Exception as e:
+            try:
+                prediction = model.predict({'input_layer_2': img_array})
+            except Exception as e2:
+                st.error(f"Prediction failed: {e}\nAlso tried dict input: {e2}")
+                st.stop()
+        class_index = np.argmax(prediction)
+        class_label = class_labels[class_index]
 
-    st.markdown("### 📝 Medical Description")
-    st.write(desc)
+        st.markdown(f"### 🧠 Model Prediction: `{class_label}`")
 
-    st.markdown("### ✅ Suggested Precautions")
-    st.write(precautions)
+        # Grad-CAM
+        heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer_name)
+        heatmap_img = overlay_heatmap(image, heatmap)
 
-    # Save Grad-CAM image for report
-    gradcam_path = "gradcam_temp.jpg"
-    heatmap_img.save(gradcam_path)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(image, caption="Original MRI", use_container_width=True)
+        with col2:
+            st.image(heatmap_img, caption="Grad-CAM", use_container_width=True)
 
-    # Generate PDF
-    # if st.button("📄 Download PDF Report"):
-    #     pdf_path = generate_pdf_report(patient_info, class_label, desc, precautions, image, heatmap_img)
-    #     with open(pdf_path, "rb") as f:
-    #         b64 = base64.b64encode(f.read()).decode()
-    #         href = f'<a href="data:application/octet-stream;base64,{b64}" download="tumor_report.pdf">Download Report</a>'
-    #         st.markdown(href, unsafe_allow_html=True)
-
-    # if st.button("📄 Generate PDF Report"):
-    pdf_path = generate_pdf_report(patient_info, class_label, desc, precautions, image, heatmap_img)
-    
-    with open(pdf_path, "rb") as f:
-        pdf_data = f.read()
-
-    st.download_button(
-        label="⬇️ Download PDF Report",
-        data=pdf_data,
-        file_name="tumor_report.pdf",
-        # mime="application/pdf"
-    )
-
-    # Chat Interface
-    st.markdown("---")
-    st.markdown("### 💬 Ask the Assistant a Follow-up Question")
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = [{"role": "system", "content": f"You are a medical assistant. The tumor was classified as {class_label}. {desc}"}]
-
-    for msg in st.session_state.chat_history:
-        if msg["role"] != "system":
-            st.chat_message(msg["role"]).write(msg["content"])
-
-    user_query = st.chat_input("Ask a question about the diagnosis, precautions, or next steps:")
-    if user_query:
-        st.session_state.chat_history.append({"role": "user", "content": user_query})
-        with st.spinner("Typing..."):
-            chat_resp = client.chat.completions.create(
+with tab3:
+    if uploaded_file and submitted:
+        # GPT Explanation
+        patient_info = {"Name": name, "Age": age, "Gender": gender, "Symptoms": symptoms}
+        prompt = generate_llm_prompt(class_label, patient_info)
+        base64_image = pil_to_base64(image)
+        with st.spinner("💬 Generating description and precautions using GPT..."):
+            response = client.responses.create(
                 model="gpt-4.1-mini",
-                messages=st.session_state.chat_history,
-                temperature=0.6,
+                input=[
+                        {"role": "user", "content": prompt},
+                        {"role": "user", "content": [{
+                                "type": "input_image",
+                                "image_url": f"data:image/jpeg;base64,{base64_image}",
+                            }],
+                        },
+                    ],
+                temperature=0.5,
             )
-            reply = chat_resp.choices[0].message.content
-            st.session_state.chat_history.append({"role": "assistant", "content": reply})
-            st.chat_message("assistant").write(reply)
+            result = response.output_text
+
+        if "Precautions:" in result:
+            parts = result.split("Precautions:")
+            desc = parts[0].replace("Description:", "").strip()
+            precautions = parts[1].strip()
+        else:
+            desc = result.strip()
+            precautions = "Not provided."
+
+        st.markdown("### 📝 Medical Description")
+        st.write(desc)
+
+        st.markdown("### ✅ Suggested Precautions")
+        st.write(precautions)
+
+        # Save Grad-CAM image for report
+        gradcam_path = "gradcam_temp.jpg"
+        heatmap_img.save(gradcam_path)
+        pdf_path = generate_pdf_report(patient_info, class_label, desc, precautions, image, heatmap_img)
+        
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
+
+        st.download_button(
+            label="⬇️ Download Report",
+            data=pdf_data,
+            file_name="tumor_report.pdf",
+        )
+
+with tab4:
+    if uploaded_file and submitted:
+        # Chat Interface
+        st.markdown("### 💬 Ask the Assistant a Follow-up Question")
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = [{"role": "system", "content": f"You are a medical assistant. The tumor was classified as {class_label}. {desc}"}]
+
+        # for msg in st.session_state.chat_history:
+        #     if msg["role"] != "system":
+        #         st.chat_message(msg["role"]).write(msg["content"])
+
+        user_query = st.chat_input("Ask a question about the diagnosis, precautions, or next steps:")
+        # if user_query:
+        #     st.session_state.chat_history.append({"role": "user", "content": user_query})
+        #     with st.spinner("Typing..."):
+        #         chat_resp = client.chat.completions.create(
+        #             model="gpt-4.1-mini",
+        #             messages=st.session_state.chat_history,
+        #             temperature=0.6,
+        #         )
+        #         reply = chat_resp.choices[0].message.content
+        #         st.session_state.chat_history.append({"role": "assistant", "content": reply})
+        #         st.chat_message("assistant").write(reply)
+        if user_query:
+            st.session_state.chat_history.append({"role": "user", "content": user_query})
+            with st.chat_message("user"):
+                st.markdown(user_query)
+            
+            with st.chat_message("assistant"):
+                stream = client.chat.completions.create(
+                    model="gpt-4.1-mini",
+                    temperature=0.6,
+                    messages=[
+                        {"role": m["role"], "content": m["content"]}
+                        for m in st.session_state.chat_history
+                    ],
+                    stream=True,
+                )
+                response = st.write_stream(stream)
+            # st.session_state.chat_history.append({"role": "assistant", "content": response})
+
+            # with st.spinner("Typing..."):
+            #     chat_resp = client.chat.completions.create(
+            #         model="gpt-4.1-mini",
+            #         messages=st.session_state.chat_history,
+            #         temperature=0.6,
+            #     )
+            #     reply = chat_resp.choices[0].message.content
+            #     st.session_state.chat_history.append({"role": "assistant", "content": reply})
+            #     st.chat_message("assistant").write(reply)
